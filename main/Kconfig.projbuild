@@ -1,0 +1,64 @@
+menu "Example Configuration"
+
+    config EXAMPLE_BASIC_AUTH
+        bool "Basic Authentication"
+        default n
+        help
+            Basic Authentication is a method for an HTTP user agent (e.g. a web browser)
+            to provide a user name and password when making a request. It is the simplest
+            technique for enforcing access controls to web resources. because it doesn't
+            require cookies, session identifiers, or login pages; rather, it uses standard
+            fields in the HTTP header.
+            Note that, Basic Authentication is not encrypted channel and also easy to retrieve
+            credentials as they are sent in plain text format.
+
+    config EXAMPLE_BASIC_AUTH_USERNAME
+        string "Basic Authenticate User Name"
+        depends on EXAMPLE_BASIC_AUTH
+        default "ESP32"
+        help
+            The client's user name which used for basic authenticate.
+
+    config EXAMPLE_BASIC_AUTH_PASSWORD
+        string "Basic Authenticate Password"
+        depends on EXAMPLE_BASIC_AUTH
+        default "ESP32Webserver"
+        help
+            The client's password which used for basic authenticate.
+
+    config EXAMPLE_ENABLE_SSE_HANDLER
+        bool "Enable Server-Sent Events (SSE) handler"
+        default n
+        help
+            Enable this option to use Server-Sent Events (SSE) functionality.
+            This will allow the server to push real-time updates to the client over an HTTP connection.
+
+    config BROKER_URI
+        string "Broker URL"
+        default "mqtts://724f4005ddac40d5a4d1586443333e56.s1.eu.hivemq.cloud:8883"
+        help
+            URL of an mqtt broker which this example connects to.
+
+    config BROKER_MQTT_USER
+        string "Broker Client username"
+        default "client"
+        help
+            Username of an mqtt broker client which this example connects to..
+    config BROKER_MQTT_PASS
+        string "Broker Client password"
+        default "BJa938Cguzds4fx"
+        help
+            Password of an mqtt broker client which this example connects to.
+
+    config BROKER_CERTIFICATE_OVERRIDE
+        string "Broker certificate override"
+        default ""
+        help
+            Please leave empty if broker certificate included from a textfile; otherwise fill in a base64 part of PEM
+            format certificate
+
+    config BROKER_CERTIFICATE_OVERRIDDEN
+        bool
+        default y if BROKER_CERTIFICATE_OVERRIDE != ""
+
+endmenu
