@@ -20,7 +20,7 @@ or has **no public IP**.
 
 ## Official web interface
 
-https://wol.kreaxv.top/
+https://ewol.top/
 
 You can:
 
