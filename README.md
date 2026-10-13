@@ -1,101 +1,31 @@
 # esp32-remote-wol
 
 Remote **Wake-on-LAN** firmware for ESP32 boards.
-
-Wake a PC remotely over the internet even if your home network is behind **CGNAT**
-or has **no public IP**.
-
----
+Works behind **CGNAT**, without a public IP or port forwarding.
 
 ## How it works
 
-1. ESP32 connects to Wi-Fi
-2. ESP32 keeps an outbound connection to an MQTT broker
-3. Device subscribes to its own topic
-4. Valid message → local Wake-on-LAN packet
+1. ESP32 connects to Wi-Fi and our server over **WSS**.
+2. You enter your ESP32 and PC MAC addresses on the website.
+3. ESP32 receives the command and sends a local WoL packet.
 
-> Wake-on-LAN must already work inside your LAN.
+Wake-on-LAN must already work on your local network.
 
----
+## Setup
 
-## Official web interface
+Visit **https://ewol.top/** to:
 
-https://ewol.top/
-
-You can:
-
-- Flash firmware directly from browser (ESP Web Tools)
+- Flash firmware from your browser
 - Configure Wi-Fi
-- Wake your PC using ESP32_MAC + PC_MAC
+- Wake your PC
 
-No configuration required.  
-This is the default and recommended usage.
+No account or password required.
 
----
+## Supported chips
 
-## Using your own MQTT broker (optional)
+ESP32, S2, S3, C2, C3, C5, C6 and C61.
 
-Only needed if you want full control instead of the hosted interface.
-
-### Firmware setup
-
-Change:
-
-```text
-#define USE_HASHED_ID 0
-MQTT_HOST
-MQTT_PORT
-MQTT_USER
-MQTT_PASS
-```
-
-### MQTT command format
-
-**Topic**
-```text
-wol/<ESP32_MAC>
-```
-
-**Payload**
-```text
-AA:BB:CC:DD:EE:FF
-```
-
-**Example**
-```text
-Topic:   wol/1A:2B:3C:4C:5D:6F
-Payload: 3C:52:82:11:9A:EF
-```
-
-Invalid topic or payload is ignored.
-
----
-
-## Supported boards
-
-Works on any board using these chips:
-
-- ESP32
-- ESP32-S2
-- ESP32-S3
-- ESP32-C2
-- ESP32-C3
-- ESP32-C5
-- ESP32-C6
-- ESP32-C61
-
-Board brand does not matter.
-
----
-
-## Security
-
-- No open ports
-- No inbound connections
-- Subscribes only to its own topic
-- Optional hashed identifiers
-
----
+Choose the firmware matching your chip and board hardware.
 
 ## License
 
