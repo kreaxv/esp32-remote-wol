@@ -1,92 +1,96 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <PubSubClient.h>
 #include <WiFiUdp.h>
+#include <WebServer.h>
+#include <WebSocketsClient.h>
 #include <ImprovWiFiLibrary.h>
-#include "mbedtls/md.h"
-#include <WebServer.h>  // minimal web page after Wi-Fi
+#include <esp_mac.h>
 
-#define USE_HASHED_ID 1
+namespace {
+constexpr uint32_t RETRY_MIN = 2000, RETRY_MAX = 60000;
+constexpr uint32_t RETRY_JITTER = 5000, SERVER_TIMEOUT = 180000;
 
-// ----------------------- MQTT -----------------------
-static const char* MQTT_HOST = "724f4005ddac40d5a4d1586443333e56.s1.eu.hivemq.cloud";
-static const uint16_t MQTT_PORT = 8883;
-static const char* MQTT_USER = "client";
-static const char* MQTT_PASS = "BJa938Cguzds4fx";
-
-// ----------------------- Globals -----------------------
-WiFiClientSecure tls;
-PubSubClient mqtt(tls);
+// Expose handshake state so failed attempts and active handshakes are distinct.
+class DeviceSocket : public WebSocketsClient {
+ public:
+  bool idle() const { return _client.status == WSC_NOT_CONNECTED; }
+};
+DeviceSocket socket;
 WiFiUDP udp;
-ImprovWiFi improvSerial(&Serial);
-WebServer server(80);
+WebServer web(80);
+ImprovWiFi improv(&Serial);
+#if ARDUINO_USB_CDC_ON_BOOT
+// With native USB enabled, also accept provisioning through a USB-to-UART bridge.
+ImprovWiFi improvUart(&Serial0);
+#endif
+char deviceMac[18], socketPath[40];
+bool started = false;
+uint32_t retryMs = RETRY_MIN, nextAttempt = 0, lastActivity = 0;
 
-static uint8_t mac[6];
-static char esp32mac[65];
-static char topicCmd[80];
-static char macColon[18];
-
-// --------------------- SHA-256 ---------------------
-static void sha256Hex(const char* input, char* output) {
-  uint8_t hash[32];
-  const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  if (mbedtls_md(info, (const unsigned char*)input, strlen(input), hash) != 0) {
-    output[0] = 0;
-    return;
-  }
-  for (int i = 0; i < 32; i++) sprintf(output + i * 2, "%02x", hash[i]);
-  output[64] = 0;
-}
-
-// --------------------- Hex Parsing ---------------------
-static uint8_t hexNibble(char c) {
+int hexValue(uint8_t c) {
   if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  return 0;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
 }
 
-// --------------------- WOL ---------------------
-static void sendWOL(const char* macStr) {
-  uint8_t targetMac[6];
-  for (int i = 0; i < 6; i++) {
-    targetMac[i] = (hexNibble(macStr[i*3]) << 4) | hexNibble(macStr[i*3 + 1]);
+void wakePC(const uint8_t* text, size_t length) {
+  if (!text || length != 17) return;
+  uint8_t mac[6], packet[102];
+  for (size_t i = 0; i < 6; ++i) {
+    int high = hexValue(text[i * 3]), low = hexValue(text[i * 3 + 1]);
+    if (high < 0 || low < 0 || (i < 5 && text[i * 3 + 2] != ':')) return;
+    mac[i] = (high << 4) | low;
   }
-
-  udp.beginPacket(WiFi.broadcastIP(), 9);
-  for (int i = 0; i < 6; i++) udp.write(0xFF);
-  for (int i = 0; i < 16; i++) udp.write(targetMac, 6);
+  memset(packet, 0xff, 6);
+  for (size_t i = 0; i < 16; ++i) memcpy(packet + 6 + i * 6, mac, 6);
+  if (!udp.beginPacket(WiFi.broadcastIP(), 9)) return;
+  udp.write(packet, sizeof(packet));
   udp.endPacket();
 }
 
-// --------------------- MQTT ---------------------
-static void onMqttMessage(char* topic, byte* payload, unsigned int length) {
-  char msg[32] = {0};
-  int len = length < sizeof(msg)-1 ? length : sizeof(msg)-1;
-  memcpy(msg, payload, len);
-  sendWOL(msg);
+void scheduleRetry() {
+  nextAttempt = millis() + retryMs + esp_random() % RETRY_JITTER;
 }
 
-static void connectMQTT() {
-  if (WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
+void onSocketEvent(WStype_t type, uint8_t* data, size_t length) {
+  if (type == WStype_CONNECTED) retryMs = RETRY_MIN;
+  if (type == WStype_CONNECTED || type == WStype_PING || type == WStype_TEXT)
+    lastActivity = millis();
+  if (type == WStype_TEXT) wakePC(data, length);
+}
 
-  tls.setInsecure();
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setCallback(onMqttMessage);
-
-  char clientId[40];
-  snprintf(clientId, sizeof(clientId), "wol-%.*s", 16, esp32mac);
-
-  if (mqtt.connect(clientId, MQTT_USER, MQTT_PASS)) {
-    mqtt.subscribe(topicCmd);
+void serviceConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (started) { started = false; socket.disconnect(); }
+    return;
+  }
+  if (!started) {
+    socket.beginSSL("ewol.top", 443, socketPath); // TLS without CA verification.
+    socket.setReconnectInterval(UINT32_MAX); // Retries are scheduled below.
+    socket.disableHeartbeat(); // Server pings; the library replies with pong.
+    retryMs = RETRY_MIN;
+    scheduleRetry();
+    started = true;
+  }
+  if (socket.isConnected() && millis() - lastActivity >= SERVER_TIMEOUT) {
+    socket.disconnect();
+    scheduleRetry();
+    return;
+  }
+  if (socket.idle()) {
+    if (int32_t(millis() - nextAttempt) < 0) return;
+    socket.setReconnectInterval(0);
+  }
+  socket.loop();
+  socket.setReconnectInterval(UINT32_MAX);
+  if (socket.idle()) {
+    scheduleRetry();
+    retryMs = min(retryMs * 2, RETRY_MAX);
   }
 }
 
-// --------------------- Display ESP32 MAC address on Web page ---------------------
-void handleRoot() {
-  char page[1024];
-  snprintf(page,sizeof(page),
+const char DEVICE_PAGE[] PROGMEM =
     "<!DOCTYPE html><html lang=\"en\"><head>"
     "<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">"
     "<title>ESP32 Device</title>"
@@ -102,55 +106,46 @@ void handleRoot() {
     "<h2>ESP32 MAC Address</h2>"
     "<p class=\"mac\">%s</p>"
     "<p class=\"note\">Copy this MAC for WOL site</p>"
-    "<a href=\"https://wol.kreaxv.top/\" target=\"_blank\">wol.kreaxv.top</a>"
-    "</body></html>",
-    macColon
-  );
-  server.send(200,"text/html",page);
-}
+    "<a href=\"https://ewol.top/\" target=\"_blank\">ewol.top</a>"
+    "</body></html>";
 
-// ================= Main =================
+void showDevicePage() {
+  char page[sizeof(DEVICE_PAGE) + sizeof(deviceMac)];
+  snprintf_P(page, sizeof(page), DEVICE_PAGE, deviceMac);
+  web.send(200, "text/html", page);
+}
+} // namespace
+
 void setup() {
   Serial.begin(115200);
-
-  // Read MAC
-  WiFi.macAddress(mac);
-
-  char macHex[13];
-  snprintf(macHex, sizeof(macHex), "%02x%02x%02x%02x%02x%02x",
-           mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-
-  if (USE_HASHED_ID) sha256Hex(macHex, esp32mac);
-  else strncpy(esp32mac, macHex, sizeof(esp32mac));
-
-  snprintf(topicCmd, sizeof(topicCmd), "wol/%s", esp32mac);
-
-  snprintf(macColon, sizeof(macColon), "%02X:%02X:%02X:%02X:%02X:%02X",
-           mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-
-  // Improv device info
-  improvSerial.setDeviceInfo(
-    (ImprovTypes::ChipFamily)0,
-    macColon,  // show MAC in portal
-    "",
-    ""
-  );
-
-  // Let Improv handle AP / portal automatically
-  WiFi.begin();  
-
-  // Web server for after Wi-Fi connected
-  server.on("/", handleRoot);
-  server.begin();
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial0.begin(115200);
+#endif
+  uint8_t mac[6];
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+    delay(1000);
+    ESP.restart();
+    return;
+  }
+  snprintf(deviceMac, sizeof(deviceMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  snprintf(socketPath, sizeof(socketPath), "/device?deviceId=%02x%02x%02x%02x%02x%02x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  socket.onEvent(onSocketEvent);
+  improv.setDeviceInfo((ImprovTypes::ChipFamily)0, deviceMac, "", "");
+#if ARDUINO_USB_CDC_ON_BOOT
+  improvUart.setDeviceInfo((ImprovTypes::ChipFamily)0, deviceMac, "", "");
+#endif
+  WiFi.begin();
+  web.on("/", showDevicePage);
+  web.begin();
 }
 
 void loop() {
-  improvSerial.handleSerial();
-
-  server.handleClient(); // handle minimal web page
-
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mqtt.connected()) connectMQTT();
-    mqtt.loop();
-  }
+  improv.handleSerial();
+#if ARDUINO_USB_CDC_ON_BOOT
+  improvUart.handleSerial();
+#endif
+  web.handleClient();
+  serviceConnection();
 }
