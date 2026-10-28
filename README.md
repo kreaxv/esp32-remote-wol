@@ -1,6 +1,6 @@
 # esp32-remote-wol
 
-Remote **Wake-on-LAN** firmware for ESP32 boards.
+Remote **Wake-on-LAN** firmware for  ESP32, S2, S3, C2, C3, C5, C6 and C61.
 Works behind **CGNAT**, without a public IP or port forwarding.
 
 ## How it works
@@ -20,12 +20,6 @@ Visit **https://ewol.top/** to:
 - Wake your PC
 
 No account or password required.
-
-## Supported chips
-
-ESP32, S2, S3, C2, C3, C5, C6 and C61.
-
-Choose the firmware matching your chip and board hardware.
 
 ## License
 
