@@ -1,8 +1,8 @@
 # esp32-remote-wol
 
-Remote **Wake-on-LAN** firmware for ESP32, S2, S3, C2, C3, C5, C6 and C61.
+Remote Wake-on-LAN firmware for **ESP32, S2, S3, C2, C3, C5, C6 and C61.**
 
-Works behind **CGNAT**, without a public IP or port forwarding.
+Works behind CGNAT, without a public IP or port forwarding.
 
 ## How it works
 
