@@ -1,0 +1,6 @@
+# Single application layout for 2 MB flash. No OTA or filesystem partition.
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xE000,   0x2000,
+factory,  app,  factory, 0x10000,  0x1E0000,
+coredump, data, coredump,0x1F0000, 0x10000,
